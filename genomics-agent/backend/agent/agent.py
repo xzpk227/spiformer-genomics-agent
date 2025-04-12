@@ -4,7 +4,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 
 from agent.prompts import SYSTEM_PROMPT
-from agent.tools.databases import query_ensembl
+from agent.tools.databases import query_ensembl, query_ncbi_gene
 
 TOOLS = [
     search_literature,

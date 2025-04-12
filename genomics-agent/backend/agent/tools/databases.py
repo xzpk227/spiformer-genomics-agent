@@ -4,7 +4,7 @@ from langchain.tools import tool
 
 
 ENSEMBL_BASE = "https://rest.ensembl.org"
-
+NCBI_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
 
 @tool
@@ -31,3 +31,39 @@ def query_ensembl(gene_symbol: str) -> str:
         return summary
     except Exception as e:
         return f"Ensembl query error: {str(e)}"
+
+
+@tool
+def query_ncbi_gene(gene_symbol: str) -> str:
+    """Query NCBI Gene database for gene summaries and functional information."""
+    try:
+        api_key = os.environ.get("NCBI_API_KEY", "")
+        # Search for gene ID
+        search_url = f"{NCBI_BASE}/esearch.fcgi"
+        params = {
+            "db": "gene", "term": f"{gene_symbol}[Gene Name] AND Homo sapiens[Organism]",
+            "retmode": "json", "retmax": 1, "api_key": api_key
+        }
+        r = requests.get(search_url, params=params, timeout=15)
+        r.raise_for_status()
+        ids = r.json().get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return f"No NCBI Gene entry found for {gene_symbol}"
+
+        # Fetch summary
+        summary_url = f"{NCBI_BASE}/esummary.fcgi"
+        r2 = requests.get(summary_url, params={"db": "gene", "id": ids[0], "retmode": "json", "api_key": api_key}, timeout=15)
+        r2.raise_for_status()
+        result = r2.json().get("result", {}).get(ids[0], {})
+
+        return (
+            f"NCBI Gene ID: {ids[0]}\n"
+            f"Name: {result.get('name')}\n"
+            f"Full Name: {result.get('description')}\n"
+            f"Summary: {result.get('summary', 'N/A')[:800]}\n"
+            f"Chromosome: {result.get('chromosome')}\n"
+            f"Location: {result.get('maplocation')}\n"
+        )
+    except Exception as e:
+        return f"NCBI Gene query error: {str(e)}"
+
