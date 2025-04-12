@@ -5,6 +5,7 @@ from langchain.tools import tool
 
 ENSEMBL_BASE = "https://rest.ensembl.org"
 NCBI_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+GWAS_BASE = "https://www.ebi.ac.uk/gwas/rest/api"
 
 
 @tool
@@ -67,3 +68,29 @@ def query_ncbi_gene(gene_symbol: str) -> str:
     except Exception as e:
         return f"NCBI Gene query error: {str(e)}"
 
+
+@tool
+def query_gwas_catalog(gene_or_disease: str) -> str:
+    """Query GWAS Catalog for disease-gene associations and significant SNPs."""
+    try:
+        url = f"{GWAS_BASE}/associations/search"
+        params = {"q": gene_or_disease, "size": 10}
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        associations = data.get("_embedded", {}).get("associations", [])
+
+        if not associations:
+            return f"No GWAS associations found for '{gene_or_disease}'"
+
+        results = [f"GWAS Catalog associations for '{gene_or_disease}':"]
+        for assoc in associations[:8]:
+            snp = assoc.get("strongestAllele", [{}])
+            trait = assoc.get("efoTraits", [{}])
+            pval = assoc.get("pvalue")
+            snp_id = snp[0].get("strongestRiskAllele", "N/A") if snp else "N/A"
+            trait_name = trait[0].get("trait", "N/A") if trait else "N/A"
+            results.append(f"  SNP: {snp_id} | Trait: {trait_name} | p-value: {pval}")
+        return "\n".join(results)
+    except Exception as e:
+        return f"GWAS Catalog query error: {str(e)}"
