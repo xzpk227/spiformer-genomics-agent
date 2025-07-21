@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools.literature import search_literature
 from agent.tools.databases import query_ensembl, query_ncbi_gene, query_gwas_catalog
+from agent.tools.bioinformatics import predict_splicing, run_enrichment_analysis
 from agent.tools.visualization import generate_report
 
 TOOLS = [
