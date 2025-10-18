@@ -1,0 +1,76 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push backend
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/genomics-backend:$IMAGE_TAG -t $REGISTRY/genomics-backend:latest ./backend
+          docker push $REGISTRY/genomics-backend:$IMAGE_TAG
+          docker push $REGISTRY/genomics-backend:latest
+
+      - name: Build & push frontend
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg API_BASE=http://${{ secrets.ALB_DNS_NAME }} \
+            -t $REGISTRY/genomics-frontend:$IMAGE_TAG \
+            -t $REGISTRY/genomics-frontend:latest \
+            ./frontend
+          docker push $REGISTRY/genomics-frontend:$IMAGE_TAG
+          docker push $REGISTRY/genomics-frontend:latest
+
+      - name: Setup Node for CDK
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install CDK deps
+        run: npm ci
+        working-directory: cdk
+
+      - name: CDK deploy
+        run: npx cdk deploy --all --require-approval never
+        working-directory: cdk
+
+      - name: Force ECS redeployment
+        run: |
+          aws ecs update-service \
+            --cluster genomics-cluster \
+            --service genomics-backend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+          aws ecs update-service \
+            --cluster genomics-cluster \
+            --service genomics-frontend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
