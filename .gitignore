@@ -1,2 +1,4 @@
 __pycache__
 papers/
+node_modules
+cdk.out
