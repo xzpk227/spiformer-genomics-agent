@@ -87,12 +87,6 @@ export class EcsStack extends cdk.Stack {
         }),
         streamPrefix: "backend",
       }),
-      healthCheck: {
-        command: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(5),
-        retries: 3,
-      },
     });
 
     const backendSg = new ec2.SecurityGroup(this, "BackendSg", { vpc });

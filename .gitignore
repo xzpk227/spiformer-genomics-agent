@@ -2,3 +2,5 @@ __pycache__
 papers/
 node_modules
 cdk.out
+.env
+.DS_STORE

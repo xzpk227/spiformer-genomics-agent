@@ -19,11 +19,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve generated reports
-os.makedirs("/app/reports", exist_ok=True)
-app.mount("/reports", StaticFiles(directory="/app/reports"), name="reports")
-
 agent_executor = build_agent_executor()
+
+# Serve local reports when REPORTS_BUCKET is not configured (local dev)
+if not os.environ.get("REPORTS_BUCKET"):
+    os.makedirs("/app/reports", exist_ok=True)
+    app.mount("/reports", StaticFiles(directory="/app/reports"), name="reports")
 
 
 class ChatRequest(BaseModel):

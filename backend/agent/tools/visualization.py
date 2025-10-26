@@ -5,13 +5,20 @@ from io import BytesIO
 from datetime import datetime
 from langchain.tools import tool
 
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-REPORTS_DIR = "/app/reports"
+REPORTS_BUCKET = os.environ.get("REPORTS_BUCKET")
+PRESIGNED_URL_EXPIRY = 60 * 60 * 24  # 24 hours
+
+
+def _get_s3_client():
+    return boto3.client("s3")
 
 
 def _fig_to_base64(fig) -> str:
@@ -21,25 +28,41 @@ def _fig_to_base64(fig) -> str:
     return base64.b64encode(buf.read()).decode()
 
 
+def _upload_to_s3(html: str, key: str) -> str:
+    """Upload HTML report to S3 and return a presigned URL."""
+    s3 = _get_s3_client()
+    s3.put_object(
+        Bucket=REPORTS_BUCKET,
+        Key=key,
+        Body=html.encode("utf-8"),
+        ContentType="text/html",
+    )
+    url = s3.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": REPORTS_BUCKET, "Key": key},
+        ExpiresIn=PRESIGNED_URL_EXPIRY,
+    )
+    return url
+
+
 @tool
 def generate_report(analysis_data: str) -> str:
     """
     Generate an HTML report with visualizations from analysis results.
     Input should be a JSON string with keys: gene, disease, literature, databases, enrichment, splicing.
-    Returns the path to the generated report.
+    If REPORTS_BUCKET is set, uploads to S3 and returns a presigned URL (valid 24h).
+    Otherwise saves to /app/reports and returns the local path.
     """
     try:
-        os.makedirs(REPORTS_DIR, exist_ok=True)
         try:
             data = json.loads(analysis_data)
         except json.JSONDecodeError:
-            # Treat as plain text summary
             data = {"summary": analysis_data}
 
         gene = data.get("gene", "Unknown Gene")
         disease = data.get("disease", "Unknown Disease")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = os.path.join(REPORTS_DIR, f"report_{gene}_{disease}_{timestamp}.html")
+        filename = f"report_{gene}_{disease}_{timestamp}.html"
 
         # Generate enrichment bar chart if data available
         enrichment_img = ""
@@ -102,9 +125,18 @@ def generate_report(analysis_data: str) -> str:
 </body>
 </html>"""
 
-        with open(report_path, "w") as f:
-            f.write(html)
+        if REPORTS_BUCKET:
+            url = _upload_to_s3(html, f"reports/{filename}")
+            return f"Report generated. Download link (valid 24h): {url}"
+        else:
+            reports_dir = "/app/reports"
+            os.makedirs(reports_dir, exist_ok=True)
+            report_path = os.path.join(reports_dir, filename)
+            with open(report_path, "w") as f:
+                f.write(html)
+            return f"Report generated: {report_path}"
 
-        return f"Report generated: {report_path}"
+    except (BotoCoreError, ClientError) as e:
+        return f"Report generation error (S3): {str(e)}"
     except Exception as e:
         return f"Report generation error: {str(e)}"

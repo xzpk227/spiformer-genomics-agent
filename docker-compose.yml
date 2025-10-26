@@ -9,7 +9,7 @@ services:
       - .env
     volumes:
       - ./backend:/app
-      - reports:/app/reports
+      - ./reports:/app/reports
     restart: unless-stopped
 
   frontend:
@@ -20,5 +20,3 @@ services:
       - backend
     restart: unless-stopped
 
-volumes:
-  reports:
