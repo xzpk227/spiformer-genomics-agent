@@ -27,5 +27,6 @@ new EcsStack(app, "GenomicsEcsStack", {
   vpc: network.vpc,
   backendRepo: ecr.backendRepo,
   frontendRepo: ecr.frontendRepo,
+  spliformerRepo: ecr.spliformerRepo,
   reportsBucket: storage.reportsBucket,
 });

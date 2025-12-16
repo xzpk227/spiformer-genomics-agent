@@ -4,6 +4,8 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as efs from "aws-cdk-lib/aws-efs";
+import * as servicediscovery from "aws-cdk-lib/aws-servicediscovery";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as iam from "aws-cdk-lib/aws-iam";
@@ -13,6 +15,7 @@ interface EcsStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
   backendRepo: ecr.Repository;
   frontendRepo: ecr.Repository;
+  spliformerRepo: ecr.Repository;
   reportsBucket: s3.Bucket;
 }
 
@@ -20,7 +23,7 @@ export class EcsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: EcsStackProps) {
     super(scope, id, props);
 
-    const { vpc, backendRepo, frontendRepo, reportsBucket } = props;
+    const { vpc, backendRepo, frontendRepo, spliformerRepo, reportsBucket } = props;
 
     // ── Secrets ────────────────────────────────────────────────────────────
     const openaiSecret = secretsmanager.Secret.fromSecretNameV2(
@@ -40,6 +43,12 @@ export class EcsStack extends cdk.Stack {
       containerInsights: true,
     });
 
+    // ── Cloud Map namespace for internal service discovery ─────────────────
+    const namespace = new servicediscovery.PrivateDnsNamespace(this, "Namespace", {
+      name: "genomics.local",
+      vpc,
+    });
+
     // ── ALB ────────────────────────────────────────────────────────────────
     const alb = new elbv2.ApplicationLoadBalancer(this, "Alb", {
       vpc,
@@ -53,6 +62,94 @@ export class EcsStack extends cdk.Stack {
         contentType: "text/plain",
         messageBody: "Not found",
       }),
+    });
+
+    // ── EFS for reference genomes ──────────────────────────────────────────
+    const genomeFsSg = new ec2.SecurityGroup(this, "GenomeFsSg", { vpc });
+
+    const genomeFs = new efs.FileSystem(this, "GenomeFs", {
+      vpc,
+      securityGroup: genomeFsSg,
+      // Explicitly place mount targets in private subnets so Fargate tasks can reach them
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      lifecyclePolicy: efs.LifecyclePolicy.AFTER_90_DAYS,
+      performanceMode: efs.PerformanceMode.GENERAL_PURPOSE,
+      encrypted: true,
+    });
+
+    const genomeAccessPoint = genomeFs.addAccessPoint("GenomeAccessPoint", {
+      path: "/ref",
+      createAcl: { ownerGid: "0", ownerUid: "0", permissions: "755" },
+      posixUser: { gid: "0", uid: "0" },
+    });
+
+    // ── Spliformer ─────────────────────────────────────────────────────────
+    const spliformerTaskRole = new iam.Role(this, "SpliformerTaskRole", {
+      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+    });
+    reportsBucket.grantReadWrite(spliformerTaskRole);
+    spliformerTaskRole.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"],
+      resources: [genomeFs.fileSystemArn],
+    }));
+
+    const spliformerTaskDef = new ecs.FargateTaskDefinition(this, "SpliformerTaskDef", {
+      memoryLimitMiB: 16384,
+      cpu: 4096,
+      taskRole: spliformerTaskRole,
+      volumes: [{
+        name: "genome-ref",
+        efsVolumeConfiguration: {
+          fileSystemId: genomeFs.fileSystemId,
+          transitEncryption: "ENABLED",
+          authorizationConfig: {
+            accessPointId: genomeAccessPoint.accessPointId,
+            iam: "ENABLED",
+          },
+        },
+      }],
+    });
+
+    const spliformerContainer = spliformerTaskDef.addContainer("spliformer", {
+      image: ecs.ContainerImage.fromEcrRepository(spliformerRepo, "latest"),
+      portMappings: [{ containerPort: 5001 }],
+      environment: {
+        REPORTS_BUCKET: reportsBucket.bucketName,
+        GENOME_DIR: "/ref",
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: new logs.LogGroup(this, "SpliformerLogs", {
+          logGroupName: "/ecs/genomics-spliformer",
+          retention: logs.RetentionDays.ONE_WEEK,
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        }),
+        streamPrefix: "spliformer",
+      }),
+    });
+
+    spliformerContainer.addMountPoints({
+      containerPath: "/ref",
+      sourceVolume: "genome-ref",
+      readOnly: false,
+    });
+
+    const spliformerSg = new ec2.SecurityGroup(this, "SpliformerSg", { vpc });
+    // Allow Spliformer tasks to reach EFS mount targets on NFS port
+    genomeFsSg.connections.allowFrom(spliformerSg, ec2.Port.tcp(2049));
+
+    const spliformerService = new ecs.FargateService(this, "SpliformerService", {
+      cluster,
+      taskDefinition: spliformerTaskDef,
+      desiredCount: 1,
+      securityGroups: [spliformerSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      serviceName: "genomics-spliformer",
+      cloudMapOptions: {
+        name: "spliformer",
+        cloudMapNamespace: namespace,
+        dnsRecordType: servicediscovery.DnsRecordType.A,
+      },
     });
 
     // ── Backend ────────────────────────────────────────────────────────────
@@ -73,6 +170,8 @@ export class EcsStack extends cdk.Stack {
       environment: {
         PINECONE_INDEX_NAME: "genomics-literature",
         REPORTS_BUCKET: reportsBucket.bucketName,
+        // Spliformer reachable via Cloud Map DNS
+        SPLIFORMER_URL: "http://spliformer.genomics.local:5001",
       },
       secrets: {
         OPENAI_API_KEY: ecs.Secret.fromSecretsManager(openaiSecret),
@@ -90,6 +189,9 @@ export class EcsStack extends cdk.Stack {
     });
 
     const backendSg = new ec2.SecurityGroup(this, "BackendSg", { vpc });
+    // Allow backend → spliformer
+    spliformerSg.connections.allowFrom(backendSg, ec2.Port.tcp(5001));
+
     const backendService = new ecs.FargateService(this, "BackendService", {
       cluster,
       taskDefinition: backendTaskDef,
@@ -109,7 +211,7 @@ export class EcsStack extends cdk.Stack {
     listener.addAction("BackendRoutes", {
       priority: 10,
       conditions: [
-        elbv2.ListenerCondition.pathPatterns(["/chat", "/health", "/reports/*"]),
+        elbv2.ListenerCondition.pathPatterns(["/chat", "/health", "/reports/*", "/visualize"]),
       ],
       action: elbv2.ListenerAction.forward([
         new elbv2.ApplicationTargetGroup(this, "BackendTg", {
@@ -172,5 +274,9 @@ export class EcsStack extends cdk.Stack {
     // ── Outputs ────────────────────────────────────────────────────────────
     new cdk.CfnOutput(this, "AppUrl", { value: `http://${alb.loadBalancerDnsName}` });
     new cdk.CfnOutput(this, "ClusterName", { value: cluster.clusterName });
+    new cdk.CfnOutput(this, "GenomeFileSystemId", {
+      value: genomeFs.fileSystemId,
+      description: "EFS filesystem ID — upload hg38.fa/hg19.fa to /ref before first use",
+    });
   }
 }

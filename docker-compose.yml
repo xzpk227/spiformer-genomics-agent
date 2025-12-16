@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   backend:
     build: ./backend
@@ -7,9 +5,13 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - SPLIFORMER_URL=http://spliformer:5001
     volumes:
       - ./backend:/app
       - ./reports:/app/reports
+    depends_on:
+      - spliformer
     restart: unless-stopped
 
   frontend:
@@ -18,5 +20,13 @@ services:
       - "3000:80"
     depends_on:
       - backend
+    restart: unless-stopped
+
+  spliformer:
+    build: ./spliformer
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./ref:/ref   # mount hg38.fa or hg19.fa here
     restart: unless-stopped
 

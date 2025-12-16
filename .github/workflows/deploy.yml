@@ -49,6 +49,15 @@ jobs:
           docker push $REGISTRY/genomics-frontend:$IMAGE_TAG
           docker push $REGISTRY/genomics-frontend:latest
 
+      - name: Build & push spliformer
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/genomics-spliformer:$IMAGE_TAG -t $REGISTRY/genomics-spliformer:latest ./spliformer
+          docker push $REGISTRY/genomics-spliformer:$IMAGE_TAG
+          docker push $REGISTRY/genomics-spliformer:latest
+
       - name: Setup Node for CDK
         uses: actions/setup-node@v4
         with:
@@ -72,5 +81,10 @@ jobs:
           aws ecs update-service \
             --cluster genomics-cluster \
             --service genomics-frontend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+          aws ecs update-service \
+            --cluster genomics-cluster \
+            --service genomics-spliformer \
             --force-new-deployment \
             --region ${{ env.AWS_REGION }}

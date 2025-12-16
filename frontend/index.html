@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Genomics AI Research Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; background: #0f1117; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
@@ -11,11 +12,35 @@
   header h1 { font-size: 1.2rem; color: #7eb8f7; }
   header span { font-size: 0.8rem; color: #888; }
   #chat-container { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
-  .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 0.92rem; white-space: pre-wrap; }
-  .user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+
+  .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 0.92rem; }
+  .user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
   .assistant { align-self: flex-start; background: #1e2235; border: 1px solid #2a2d3e; border-bottom-left-radius: 4px; }
   .assistant .label { font-size: 0.75rem; color: #7eb8f7; margin-bottom: 6px; font-weight: 600; }
   .thinking { color: #888; font-style: italic; }
+
+  /* Markdown rendering */
+  .md-body p { margin-bottom: 0.6em; }
+  .md-body p:last-child { margin-bottom: 0; }
+  .md-body strong { color: #a8d4ff; }
+  .md-body em { color: #c8c8c8; }
+  .md-body code { background: #0f1117; border: 1px solid #2a2d3e; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; font-family: monospace; }
+  .md-body pre { background: #0f1117; border: 1px solid #2a2d3e; border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+  .md-body pre code { border: none; padding: 0; background: none; }
+  .md-body ul, .md-body ol { padding-left: 1.4em; margin-bottom: 0.6em; }
+  .md-body li { margin-bottom: 0.2em; }
+  .md-body h1, .md-body h2, .md-body h3 { color: #7eb8f7; margin: 0.8em 0 0.4em; }
+  .md-body a { color: #7eb8f7; text-decoration: underline; }
+  .md-body a:hover { color: #a8d4ff; }
+  .md-body table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  .md-body th, .md-body td { border: 1px solid #2a2d3e; padding: 6px 10px; text-align: left; }
+  .md-body th { background: #0f1117; color: #7eb8f7; }
+
+  /* Heatmap images inline */
+  .heatmap-container { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .heatmap-container img { max-width: 100%; border-radius: 6px; border: 1px solid #2a2d3e; cursor: pointer; }
+  .heatmap-container img:hover { border-color: #7eb8f7; }
+
   #input-area { background: #1a1d2e; border-top: 1px solid #2a2d3e; padding: 16px 24px; display: flex; gap: 10px; }
   #user-input { flex: 1; background: #0f1117; border: 1px solid #2a2d3e; border-radius: 8px; padding: 10px 14px; color: #e0e0e0; font-size: 0.92rem; resize: none; outline: none; }
   #user-input:focus { border-color: #2563eb; }
@@ -39,14 +64,14 @@
   <button class="example-btn" onclick="setExample('What are the known ALS risk genes from GWAS studies?')">ALS GWAS risk genes</button>
   <button class="example-btn" onclick="setExample('Run enrichment analysis on SOD1, FUS, TDP43, C9orf72, PTPRN2')">Enrichment: ALS genes</button>
   <button class="example-btn" onclick="setExample('Get Ensembl annotation for PTPRN2')">Ensembl: PTPRN2</button>
+  <button class="example-btn" onclick="setExample('Predict splicing for chr2:179642185:G:A using Spliformer hg19')">Spliformer: chr2:179642185:G:A</button>
+  <button class="example-btn" onclick="setExample('Show Spliformer motif heatmaps for chr2:179642185:G:A hg19')">Spliformer motifs: chr2:179642185:G:A</button>
 </div>
 
 <div id="chat-container">
   <div class="message assistant">
     <div class="label">🧬 Genomics Agent</div>
-    Hello! I'm your genomics AI research assistant. I can analyze genes and diseases by searching scientific literature, querying Ensembl/NCBI/GWAS databases, running splicing predictions, pathway enrichment, and generating reports.
-
-Try: <em>"Analyze PTPRN2 in ALS"</em>
+    <div class="md-body">Hello! I'm your genomics AI research assistant. I can analyze genes and diseases by searching scientific literature, querying Ensembl/NCBI/GWAS databases, running splicing predictions, pathway enrichment, and generating reports.<br><br>Try: <em>"Analyze PTPRN2 in ALS"</em></div>
   </div>
 </div>
 
@@ -57,7 +82,22 @@ Try: <em>"Analyze PTPRN2 in ALS"</em>
 
 <script>
   const API_BASE = "http://localhost:8000";
+  const SPLIFORMER_BASE = "http://localhost:5001";
   let history = [];
+
+  // Image URL patterns to auto-download
+  const IMAGE_URL_PATTERNS = [
+    /https?:\/\/[^\s)]+\.png/gi,
+    /https?:\/\/[^\s)]+\.jpg/gi,
+  ];
+
+  marked.setOptions({ breaks: true, gfm: true });
+
+  // Force all links to open in new tab
+  const renderer = new marked.Renderer();
+  renderer.link = (href, title, text) =>
+    `<a href="${href}" target="_blank" rel="noopener noreferrer"${title ? ` title="${title}"` : ""}>${text}</a>`;
+  marked.use({ renderer });
 
   function setExample(text) {
     document.getElementById("user-input").value = text;
@@ -99,19 +139,91 @@ Try: <em>"Analyze PTPRN2 in ALS"</em>
     }
   }
 
+  function extractImageUrls(text) {
+    const urls = new Set();
+    const mdLinks = [...text.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)]+\.png[^)]*)\)/gi)];
+    mdLinks.forEach(m => urls.add(m[2]));
+    IMAGE_URL_PATTERNS.forEach(pat => {
+      const matches = [...text.matchAll(pat)];
+      matches.forEach(m => urls.add(m[0]));
+    });
+    return [...urls];
+  }
+
+  function autoDownload(urls) {
+    urls.forEach(async url => {
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = url.split("/").pop().split("?")[0];
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      } catch (e) {
+        console.warn("Download failed for", url, e);
+      }
+    });
+  }
+
+  function renderHeatmaps(urls, container) {
+    if (!urls.length) return;
+    const wrap = document.createElement("div");
+    wrap.className = "heatmap-container";
+    urls.forEach(url => {
+      const img = document.createElement("img");
+      img.src = url;
+      img.alt = url.split("/").pop().split("?")[0];
+      img.title = "Click to open full size";
+      img.onclick = () => window.open(url, "_blank");
+      wrap.appendChild(img);
+    });
+    container.appendChild(wrap);
+  }
+
   function appendMessage(role, text, thinking = false) {
     const container = document.getElementById("chat-container");
     const div = document.createElement("div");
     div.className = `message ${role}${thinking ? " thinking" : ""}`;
-    if (role === "assistant") {
+
+    if (role === "assistant" && !thinking) {
       const label = document.createElement("div");
       label.className = "label";
       label.textContent = "🧬 Genomics Agent";
       div.appendChild(label);
+
+      const body = document.createElement("div");
+      body.className = "md-body";
+      // Replace image links with just the label text (no clickable anchor) — images render inline below
+      const imageUrls = extractImageUrls(text);
+      let processedText = text;
+      imageUrls.forEach(url => {
+        // Remove markdown links pointing to images, keep just the label
+        processedText = processedText.replace(new RegExp(`\\[([^\\]]+)\\]\\(${url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`, 'g'), '$1');
+      });
+      body.innerHTML = marked.parse(processedText);
+      body.querySelectorAll("a").forEach(a => {
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+      });
+      div.appendChild(body);
+
+      // Auto-download and inline-render any image URLs
+      if (imageUrls.length) {
+        console.log("Auto-downloading images:", imageUrls);
+        autoDownload(imageUrls);
+        renderHeatmaps(imageUrls, div);
+      }
+    } else {
+      const content = document.createElement("span");
+      content.textContent = text;
+      div.appendChild(content);
     }
-    const content = document.createElement("span");
-    content.textContent = text;
-    div.appendChild(content);
+
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
     return div;
