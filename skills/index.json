@@ -1,0 +1,29 @@
+{
+  "variant_analysis": {
+    "weights_path": "skills/variant_analysis.pt",
+    "metadata": {
+      "task_id": 0,
+      "episodes": 600,
+      "final_accuracy": 1.0,
+      "lambda_ewc": 50.0
+    }
+  },
+  "literature_search": {
+    "weights_path": "skills/literature_search.pt",
+    "metadata": {
+      "task_id": 1,
+      "episodes": 600,
+      "final_accuracy": 0.0,
+      "lambda_ewc": 50.0
+    }
+  },
+  "pathway_enrichment": {
+    "weights_path": "skills/pathway_enrichment.pt",
+    "metadata": {
+      "task_id": 2,
+      "episodes": 600,
+      "final_accuracy": 1.0,
+      "lambda_ewc": 50.0
+    }
+  }
+}
